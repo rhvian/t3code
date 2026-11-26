@@ -1005,3 +1005,12 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(AgentAwarenessRelay, make);
+
+// Self-use build: production wiring uses this layer so agent activity is
+// never published to the T3 Connect relay, whatever the stored preference.
+export const layerDisabled = Layer.succeed(AgentAwarenessRelay, {
+  publishThread: Effect.fn("AgentAwarenessRelay.publishThread")(function* () {}),
+  drain: Effect.void,
+  requestCatchUp: Effect.fn("AgentAwarenessRelay.requestCatchUp")(function* () {}),
+  start: Effect.fn("AgentAwarenessRelay.start")(function* () {}),
+});

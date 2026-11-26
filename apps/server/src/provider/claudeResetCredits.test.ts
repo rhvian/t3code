@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientResponse, UrlParams } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { describe, expect, it } from "vite-plus/test";
 
 import * as ClaudeResetCredits from "./claudeResetCredits.ts";
@@ -130,30 +130,14 @@ describe("claudeResetCreditsToContract", () => {
 });
 
 effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
-  it.effect("reads the grants with the CLI's request", () =>
+  it.effect("never reads grants in the self-use build", () =>
     Effect.gen(function* () {
       const { configDir } = yield* writeLogin;
-      const client = HttpClient.make((request) => {
-        expect(request.method).toBe("GET");
-        expect(request.url).toBe("https://api.anthropic.com/api/oauth/usage");
-        expect(UrlParams.toString(request.urlParams)).toBe("cedar_ember=1&skip_spend=1");
-        expect(request.headers.authorization).toBe("Bearer oauth-token");
-        expect(request.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
-        expect(request.headers["user-agent"]).toBe("claude-cli/2.1.0 (external, cli)");
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(
-            request,
-            Response.json({
-              cedar_ember: { eligible: true, next_grant_id: "grant_a", grants: [grant({})] },
-            }),
-          ),
-        );
-      });
       const credits = yield* ClaudeResetCredits.readClaudeResetCredits(configDir, "2.1.0").pipe(
         Effect.provideService(HostProcess.Platform, "linux"),
-        Effect.provideService(HttpClient.HttpClient, client),
+        Effect.provideService(HttpClient.HttpClient, refuseRequests),
       );
-      expect(credits).toMatchObject({ availableCount: 1, nextCreditId: "grant_a" });
+      expect(credits).toBeUndefined();
     }),
   );
 

@@ -353,7 +353,7 @@ export const isRelayTracingEnabled = (env: Readonly<Record<string, string | unde
   }).pipe(
     Effect.map(
       ({ telemetry, t3, spec }) =>
-        (telemetry.value ?? !isCiEnvironment(env)) &&
+        (telemetry.value ?? false) &&
         !isDoNotTrackSet(env) &&
         !(t3.value ?? spec.value ?? false),
     ),

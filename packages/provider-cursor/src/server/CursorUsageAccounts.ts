@@ -312,3 +312,12 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(CursorUsageAccounts, make);
+
+// Self-use build: production wiring uses this layer so stored Cursor API keys
+// are never read or exchanged for account usage history.
+export const layerDisabled = Layer.succeed(CursorUsageAccounts, {
+  scan: Effect.fn("CursorUsageAccounts.scan")(function* () {
+    return [];
+  }),
+  awaitPersisted: Effect.void,
+});
