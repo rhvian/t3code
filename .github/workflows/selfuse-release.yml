@@ -1,0 +1,145 @@
+name: Selfuse release (no telemetry)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Upstream tag to build (e.g. v0.1.13)
+        required: true
+        default: v0.1.13
+      release_tag:
+        description: Release tag to create (e.g. v0.1.13-selfuse)
+        required: true
+        default: v0.1.13-selfuse
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out upstream at tag
+        uses: actions/checkout@v4
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.upstream_tag }}
+          path: upstream
+
+      - name: Check out selfuse patch files
+        uses: actions/checkout@v4
+        with:
+          ref: selfuse/no-telemetry
+          path: selfuse
+
+      - name: Overlay no-telemetry patch files
+        run: |
+          set -euo pipefail
+          for f in \
+            apps/desktop/src/app/DesktopConfig.ts \
+            apps/desktop/src/updates/updatesTestHarness.ts \
+            apps/server/src/cloud/npmRelease.test.ts \
+            apps/server/src/cloud/npmRelease.ts \
+            apps/server/src/provider/CodexChatGptModels.test.ts \
+            apps/server/src/provider/CodexChatGptModels.ts \
+            apps/server/src/provider/claudeResetCredits.test.ts \
+            apps/server/src/provider/claudeResetCredits.ts \
+            apps/server/src/relay/AgentAwarenessRelay.ts \
+            apps/server/src/server.ts \
+            apps/server/src/telemetry/AnalyticsService.ts \
+            docs/user/telemetry.md \
+            packages/provider-cursor/src/server/CursorUsageAccounts.ts \
+            packages/provider-cursor/src/server/usageLimits.test.ts \
+            packages/provider-cursor/src/server/usageLimits.ts \
+            packages/provider-grok/src/server/usageLimits.ts \
+            packages/provider-opencode/src/server/usageLimits.ts \
+            packages/shared/src/otelEnvironment.test.ts \
+            packages/shared/src/otelEnvironment.ts
+          do
+            cp "selfuse/$f" "upstream/$f"
+          done
+          if grep -rInE "ingest\.t3\.codes|phc_XOWci|T3CODE_POSTHOG" upstream/apps upstream/packages --include="*.ts" --include="*.tsx"; then
+            echo "Telemetry endpoint or built-in key found; aborting."
+            exit 1
+          fi
+
+      - name: Set up Node and pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.14.0
+
+      - name: Install cross-build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 libsecret-1-dev
+          rustup target add x86_64-pc-windows-gnu
+
+      - name: Build resource monitor for Windows
+        working-directory: upstream/native/resource-monitor
+        run: |
+          cargo build --release --target x86_64-pc-windows-gnu
+          mkdir -p target/x86_64-pc-windows-msvc/release
+          cp target/x86_64-pc-windows-gnu/release/t3-resource-monitor.exe target/x86_64-pc-windows-msvc/release/
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: pnpm install --frozen-lockfile
+
+      - name: Run no-telemetry test set
+        working-directory: upstream
+        run: >-
+          ./node_modules/.bin/vp test run
+          apps/server/src/telemetry/AnalyticsService.test.ts
+          apps/server/src/telemetry/Identify.test.ts
+          apps/server/src/cloud/npmRelease.test.ts
+          apps/server/src/cloud/publicConfig.test.ts
+          packages/shared/src/otelEnvironment.test.ts
+          apps/server/src/relay/AgentAwarenessRelay.test.ts
+          apps/server/src/feedback/FeedbackService.test.ts
+          packages/provider-cursor/src/server/usageLimits.test.ts
+          packages/provider-grok/src/server/usage.test.ts
+          packages/provider-opencode/src/server/usage.test.ts
+          apps/server/src/provider/claudeResetCredits.test.ts
+          apps/server/src/provider/CodexChatGptModels.test.ts
+          apps/desktop/src/updates/DesktopUpdates.test.ts
+
+      - name: Build portable Windows zip
+        working-directory: upstream
+        env:
+          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true"
+        run: node scripts/build-desktop-artifact.ts --platform win --target zip --arch x64
+
+      - name: Publish release
+        working-directory: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${UPSTREAM_TAG#v}"
+          asset="T3-Code-${version}-selfuse-x64.zip"
+          cp release/T3-Code-*-x64.zip "$asset"
+          sha="$(sha256sum "$asset" | cut -d' ' -f1)"
+          cat > notes.md <<EOF
+          Self-use build of pingdotgg/t3code ${UPSTREAM_TAG} with telemetry and credential probing removed.
+
+          Changes vs upstream ${UPSTREAM_TAG}:
+          - Telemetry off by default, built-in ingest endpoint/key removed
+          - Relay tracing off by default; Connect agent-activity publishing disabled
+          - Desktop auto-update checks disabled; npm release lookup disabled
+          - OpenCode/Grok/Cursor usage probes and Claude credits / Codex model fetch no longer read local credential files
+
+          Verification: no-telemetry test set passed in CI, no ingest.t3.codes or built-in key in source.
+
+          Portable Windows x64 zip. Extract to a fixed folder and run T3 Code (Beta).exe.
+          SHA-256: ${sha}
+          EOF
+          gh release create "$RELEASE_TAG" "$asset" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target selfuse/no-telemetry \
+            --title "T3 Code ${version} (selfuse, no telemetry)" \
+            --notes-file notes.md
